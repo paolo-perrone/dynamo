@@ -1811,7 +1811,8 @@ pub(crate) struct ChoiceState {
     /// They must follow recovered opener text on mismatch and precede call events
     /// when the opener completes.
     pending_qwen_opener_reasoning: Vec<String>,
-    /// Logprobs of chunks generated after queued reasoning, held until it is released.
+    /// Logprobs of chunks generated after the latest queued reasoning, held until it
+    /// is released.
     pending_qwen_opener_logprobs: Option<ChatChoiceLogprobs>,
     qwen_reasoning_event_positions: HashSet<usize>,
     qwen_reasoning_choice_positions: HashSet<usize>,
@@ -2113,8 +2114,20 @@ impl ChoiceState {
         }
     }
 
-    fn queue_qwen_opener_reasoning(&mut self, reasoning: String) {
+    /// Scores held since the previous queued reasoning were generated before this
+    /// one, so they lead its source envelope's `logprobs`.
+    fn queue_qwen_opener_reasoning(
+        &mut self,
+        reasoning: String,
+        source_logprobs: &mut Option<ChatChoiceLogprobs>,
+    ) {
         self.pending_qwen_opener_reasoning.push(reasoning);
+        if let Some(mut held) = self.pending_qwen_opener_logprobs.take() {
+            if let Some(source) = source_logprobs.take() {
+                extend_logprobs(&mut held, source);
+            }
+            *source_logprobs = Some(held);
+        }
     }
 
     fn prepend_pending_qwen_reasoning(&mut self, events: &mut Vec<UnifiedParserEvent>) {
@@ -2470,14 +2483,7 @@ impl ChoiceState {
         let mut logprobs = self.pending_qwen_opener_logprobs.take();
         if let Some(source) = original.logprobs.take() {
             match logprobs.as_mut() {
-                Some(held) => {
-                    if let Some(content) = source.content {
-                        held.content.get_or_insert_default().extend(content);
-                    }
-                    if let Some(refusal) = source.refusal {
-                        held.refusal.get_or_insert_default().extend(refusal);
-                    }
-                }
+                Some(held) => extend_logprobs(held, source),
                 None => logprobs = Some(source),
             }
         }
@@ -2908,6 +2914,15 @@ enum FinishedStreamChunk {
     Choice(ChatChoiceStream),
     Boundary(ChatChoiceStream, super::MessageBoundary),
     Source(Annotated<Box<NvCreateChatCompletionStreamResponse>>),
+}
+
+fn extend_logprobs(held: &mut ChatChoiceLogprobs, later: ChatChoiceLogprobs) {
+    if let Some(content) = later.content {
+        held.content.get_or_insert_default().extend(content);
+    }
+    if let Some(refusal) = later.refusal {
+        held.refusal.get_or_insert_default().extend(refusal);
+    }
 }
 
 fn take_qwen_reasoning_response(
@@ -3583,7 +3598,10 @@ where
                             states
                                 .get_mut(&original.index)
                                 .expect("preserved parser state must still exist")
-                                .queue_qwen_opener_reasoning(reasoning.clone());
+                                .queue_qwen_opener_reasoning(
+                                    reasoning.clone(),
+                                    &mut original.logprobs,
+                                );
                             let mut source_data = chat.clone();
                             source_data.inner.choices.clear();
                             let keep_source_metadata = !qwen_source_metadata_deferred;
