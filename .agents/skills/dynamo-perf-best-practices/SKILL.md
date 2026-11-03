@@ -71,7 +71,7 @@ When the PR description or commit messages claim a speedup, a memory saving, or 
 - **Fair A/B.** Recent main at a stated SHA, the same machine, alternating fresh processes, the same offered load, identical outputs for completed requests, and medians over enough runs to show the noise. For a loss or overload fix, report errors and drops for both arms.
 - **Claims that don't hold.** Counted `perf record -F` samples (use period-weighted `perf report`), closed-loop requests per second on a component that isn't the bottleneck, mocks that don't send production types, numbers from an older head that don't say so, and wall-clock timing in a GIL-saturated process (use `py-spy --gil`).
 - **Tests.** A test that fails on the parent commit when the mechanism is observable (a skip, a removed copy, fewer shared writes), a parity test against the old path for a rewrite, a `const` size assert for size-sensitive Rust types, and no timing thresholds in CI.
-- **Where to reproduce.** The `dynamo-frontend-benchmark` skill; `lib/bench/kv_router/` (protocol in `INDEXER_BENCH.md`); `lib/bench/offline_replay_bench.rs` and the `dynamo-kv-replay-parity` skill; Criterion benches in `lib/{kv-router,llm,runtime}/benches/`.
+- **Where to reproduce.** The `dynamo-frontend-benchmark` skill; `lib/bench/kv_router/` (protocol in `INDEXER_BENCH.md`); for `SelectionCore`, the scheduler queue actor or the default policy, `lib/router-plugins/builtin/benches/default_concurrent.rs` (admission throughput under concurrent callers; protocol in its module docs); `lib/bench/offline_replay_bench.rs` and the `dynamo-kv-replay-parity` skill; Criterion benches in `lib/{kv-router,llm,runtime}/benches/`.
 
 ## Report
 

@@ -25,6 +25,7 @@ tracing.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 dynamo-kv-router = { workspace = true, features = ["bench"] }
+dynamo-runtime = { workspace = true }
 rustc-hash = "2.1.1"
 criterion = "0.5"
 tempfile = { workspace = true }
@@ -35,4 +36,8 @@ harness = false
 
 [[bench]]
 name = "default_lifecycle"
+harness = false
+
+[[bench]]
+name = "default_concurrent"
 harness = false
