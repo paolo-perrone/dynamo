@@ -68,11 +68,6 @@ const (
 	reasonUnsupportedWorkloadProvider         Reason = "unsupported_workload_provider"
 )
 
-// rbacManager interface for managing RBAC resources
-type rbacManager interface {
-	EnsureServiceAccountWithRBAC(ctx context.Context, targetNamespace, serviceAccountName, clusterRoleName string) error
-}
-
 // DynamoGraphDeploymentReconciler reconciles a DynamoGraphDeployment object
 type DynamoGraphDeploymentReconciler struct {
 	client.Client
@@ -82,7 +77,6 @@ type DynamoGraphDeploymentReconciler struct {
 	Recorder              events.EventRecorder
 	DockerSecretRetriever DockerSecretRetriever
 	SSHKeyManager         *secret.SSHKeyManager
-	RBACManager           rbacManager
 }
 
 // +kubebuilder:rbac:groups=nvidia.com,resources=dynamographdeployments,verbs=get;list;watch;create;update;patch;delete
@@ -274,13 +268,22 @@ func workloadRoutingAnnotationsChanged(update event.UpdateEvent) bool {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *DynamoGraphDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	controllerBuilder, err := r.controllerBuilder(mgr)
+	if err != nil {
+		return err
+	}
+	return controllerBuilder.Complete(r)
+}
+
+// controllerBuilder shares production watches and indexes with instrumented reconcilers.
+func (r *DynamoGraphDeploymentReconciler) controllerBuilder(mgr ctrl.Manager) (*builder.Builder, error) {
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&corev1.Pod{},
 		podcontroller.ComponentIndex,
 		podcontroller.ComponentIndexValues,
 	); err != nil {
-		return fmt.Errorf("register DGD component Pod index: %w", err)
+		return nil, fmt.Errorf("register DGD component Pod index: %w", err)
 	}
 
 	// Index native PodSnapshot references so dependency events can find affected DGDs.
@@ -291,7 +294,7 @@ func (r *DynamoGraphDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) err
 			dgdPodSnapshotRefIndex,
 			dgdPodSnapshotRefIndexValues,
 		); err != nil {
-			return fmt.Errorf("register DGD PodSnapshot reference index: %w", err)
+			return nil, fmt.Errorf("register DGD PodSnapshot reference index: %w", err)
 		}
 	}
 
@@ -340,7 +343,7 @@ func (r *DynamoGraphDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) err
 	// Restore owned pools after deletion or spec drift without requiring GAIE on every cluster.
 	_, poolMappingErr := mgr.GetRESTMapper().RESTMapping(epp.InferencePoolGVK.GroupKind(), epp.InferencePoolGVK.Version)
 	if poolMappingErr != nil && !meta.IsNoMatchError(poolMappingErr) {
-		return fmt.Errorf("discover InferencePool API for DGD watch: %w", poolMappingErr)
+		return nil, fmt.Errorf("discover InferencePool API for DGD watch: %w", poolMappingErr)
 	}
 	if poolMappingErr == nil {
 		ctrlBuilder = ctrlBuilder.Owns(&gaiev1.InferencePool{}, builder.WithPredicates(
@@ -404,7 +407,7 @@ func (r *DynamoGraphDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) err
 		ctrlBuilder = newGroveWatchSetup(r.Client).addTo(ctrlBuilder)
 	}
 
-	return ctrlBuilder.Complete(r)
+	return ctrlBuilder, nil
 }
 
 func (r *DynamoGraphDeploymentReconciler) GetRecorder() events.EventRecorder {
