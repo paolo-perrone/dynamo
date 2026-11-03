@@ -42,7 +42,8 @@ pytestmark = [
     pytest.mark.parallel,
 ]
 
-_AIS_MODEL = "Qwen/Qwen3-32B"
+# Keep real AIS optimizer smoke tests bounded on shared CPU runners.
+_AIS_MODEL = "Qwen/Qwen3-0.6B"
 _AIS_SYSTEM = "h200_sxm"
 
 
@@ -1329,7 +1330,8 @@ def test_agg_optimizer_synthetic_replay_smoke(monkeypatch) -> None:
                 mean_e2e_latency_ms=100000.0,
             ),
             router_mode="both",
-            overlap_credits=[0.0, 1.0],
+            overlap_credits=[1.0],
+            prefill_load_scales=[0.0, 1.0],
         )
     )
 
@@ -1356,7 +1358,8 @@ def test_agg_optimizer_timed_trace_smoke(tmp_path, monkeypatch) -> None:
                 mean_e2e_latency_ms=100000.0,
             ),
             router_mode="both",
-            overlap_credits=[0.0, 1.0],
+            overlap_credits=[0.0],
+            prefill_load_scales=[0.0, 1.0],
         )
     )
 
@@ -1382,7 +1385,8 @@ def test_optimizer_synthetic_replay_smoke(tmp_path, monkeypatch) -> None:
                 mean_tpot_ms=100000.0,
                 mean_e2e_latency_ms=100000.0,
             ),
-            overlap_credits=[0.0, 1.0],
+            overlap_credits=[0.0],
+            prefill_load_scales=[0.0, 1.0],
         )
     )
 
@@ -1408,7 +1412,8 @@ def test_optimizer_timed_trace_smoke(tmp_path, monkeypatch) -> None:
                 mean_tpot_ms=100000.0,
                 mean_e2e_latency_ms=100000.0,
             ),
-            overlap_credits=[0.0, 1.0],
+            overlap_credits=[1.0],
+            prefill_load_scales=[0.0, 1.0],
         )
     )
 
