@@ -15,8 +15,7 @@ use serde_json::{Value, json};
 
 use crate::generate::{GenerateAggregator, GenerateRequest, GenerateResponseOptions};
 use dynamo_llm::generate_format::{
-    Bound, ClientError, ClientRequest, GenerateExchange, GenerateFormat, Opened, QueueDrop, Worker,
-    WorkerError,
+    Bound, ClientError, ClientRequest, GenerateExchange, GenerateFormat, Opened, Worker,
 };
 use dynamo_llm::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
 use dynamo_llm::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
@@ -532,19 +531,6 @@ impl GenerateFormat for VllmFormat {
 
     fn error_body(&self, status: StatusCode, message: &str) -> Value {
         json!({"error": {"message": message, "type": error_type(status), "code": status.as_u16()}})
-    }
-
-    fn worker_error_body(&self, error: &WorkerError) -> Value {
-        let mut body = self.error_body(error.status, &error.message);
-        // A router queue drop names its cause; its configurable status cannot.
-        if let Some(drop) = error.queue_drop {
-            body["error"]["type"] = match drop {
-                QueueDrop::DeadlineExceeded => "deadline_exceeded",
-                QueueDrop::LimitReached => "queue_rejected",
-            }
-            .into();
-        }
-        body
     }
 }
 

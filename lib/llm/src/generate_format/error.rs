@@ -3,10 +3,7 @@
 
 use axum::http::StatusCode;
 
-use crate::http::service::{
-    error::{SanitizedError, overload_status_code},
-    metrics::*,
-};
+use crate::http::service::{error::SanitizedError, metrics::*};
 
 /// Whether dispatch failed or a returned response stream failed.
 #[derive(Clone, Copy)]
@@ -15,23 +12,11 @@ pub enum ErrorPhase {
     Stream { cancelled: bool },
 }
 
-/// Why a router class queue dropped a request before dispatch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum QueueDrop {
-    /// Its due time passed while it waited.
-    DeadlineExceeded,
-    /// A class limit refused it.
-    LimitReached,
-}
-
 /// A format's public worker error and its request-metric category.
 pub struct WorkerError {
     pub kind: ErrorType,
     pub status: StatusCode,
     pub message: String,
-    /// A router class queue drop: an `Overload` that the frontend counts as neither a
-    /// rejection nor a cancellation, whatever overload status is configured.
-    pub queue_drop: Option<QueueDrop>,
 }
 
 impl WorkerError {
@@ -40,15 +25,6 @@ impl WorkerError {
             kind,
             status,
             message: message.to_string(),
-            queue_drop: None,
-        }
-    }
-
-    /// The configured overload status (`DYN_HTTP_OVERLOAD_STATUS_CODE`, 529 by default).
-    fn dropped(drop: QueueDrop, message: impl ToString) -> Self {
-        Self {
-            queue_drop: Some(drop),
-            ..Self::new(ErrorType::Overload, overload_status_code(), message)
         }
     }
 
@@ -69,17 +45,14 @@ impl WorkerError {
 
     /// Common pre-stream policy of the native Generate endpoints. The format
     /// supplies its validation message; transport failures take precedence.
-    /// A router class queue drop comes first, the deadline before the limit, as
-    /// on the OpenAI surface. Dispatch counts any other `Overload` as an
-    /// unavailable request plus a rejection.
+    /// Dispatch counts `Overload` as an unavailable request plus a rejection.
     pub fn dispatch(error: &(dyn std::error::Error + 'static), invalid: Option<String>) -> Self {
         if request_deadline_exceeded(error) {
-            Self::dropped(
-                QueueDrop::DeadlineExceeded,
+            Self::new(
+                ErrorType::Cancelled,
+                StatusCode::TOO_MANY_REQUESTS,
                 REQUEST_DEADLINE_EXCEEDED_MESSAGE,
             )
-        } else if let Some(rejection) = queue_rejection(error) {
-            Self::dropped(QueueDrop::LimitReached, rejection)
         } else if request_was_cancelled(error) {
             Self::new(
                 ErrorType::Cancelled,

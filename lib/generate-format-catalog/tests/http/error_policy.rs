@@ -2,23 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use dynamo_kv_router::overload_status::overload_status_code;
-use dynamo_kv_router::scheduling::{QueueLimitKind, QueueRejection};
-use dynamo_llm::generate_format::ErrorPhase;
 use dynamo_runtime::error::{ErrorReason, ErrorType as Backend};
 
-/// Fails with a chain of these kinds, outermost first; with none, with the
-/// router's typed queue-limit refusal, which only dispatch returns.
 struct ErrorEngine(Vec<Backend>, bool);
-
-fn limit() -> QueueRejection {
-    QueueRejection {
-        policy_class: "latency".to_string(),
-        limit_kind: QueueLimitKind::Requests,
-        current: 4,
-        limit: 4,
-    }
-}
 
 impl ErrorEngine {
     fn error(&self) -> DynamoError {
@@ -42,9 +28,6 @@ impl ErrorEngine {
 #[async_trait::async_trait]
 impl AsyncEngine<Input, Output, Error> for ErrorEngine {
     async fn generate(&self, request: Input) -> Result<Output, Error> {
-        if self.0.is_empty() {
-            return Err(limit().into());
-        }
         let error = self.error();
         if !self.1 {
             return Err(error.into());
@@ -56,23 +39,17 @@ impl AsyncEngine<Input, Output, Error> for ErrorEngine {
     }
 }
 
-// Literal outcomes from the two handlers at 5235cfc93d, with router class queue
-// drops as the CoDel handlers answered them: before dispatch, the configured
-// overload status as `Overload` without a rejection; in an SGLang response
-// stream, a 503 `Overload`. Each row gives dispatch, SGLang response-stream, and
-// vLLM response-stream outcomes. `DYN_HTTP_OVERLOAD_STATUS_CODE` is read once,
-// so check other statuses in a fresh process.
+// Literal outcomes from the two handlers at 5235cfc93d. Each row gives
+// dispatch, SGLang response-stream, and vLLM response-stream outcomes.
 #[tokio::test]
 async fn native_error_phase_and_nested_chain_compatibility() {
     use ErrorType::{Cancelled, Internal, Overload, Unavailable, Validation};
-    let overload = overload_status_code();
-    let limit_message = limit().to_string();
     for (kinds, expected) in [
         (
             vec![Backend::DeadlineExceeded],
             [
-                (overload, Overload, "request deadline exceeded"),
-                (503, Overload, "request deadline exceeded"),
+                (429, Cancelled, "request deadline exceeded"),
+                (499, Cancelled, "request deadline exceeded"),
                 (500, Internal, "internal server error"),
             ],
         ),
@@ -119,25 +96,17 @@ async fn native_error_phase_and_nested_chain_compatibility() {
         (
             vec![Backend::WorkerOverloaded, Backend::DeadlineExceeded],
             [
-                (overload, Overload, "request deadline exceeded"),
-                (503, Overload, "request deadline exceeded"),
+                (429, Cancelled, "request deadline exceeded"),
+                (499, Cancelled, "request deadline exceeded"),
                 (500, Internal, "internal server error"),
             ],
         ),
         (
             vec![Backend::DeadlineExceeded, Backend::Cancelled],
             [
-                (overload, Overload, "request deadline exceeded"),
-                (503, Overload, "request deadline exceeded"),
+                (429, Cancelled, "request deadline exceeded"),
+                (499, Cancelled, "request deadline exceeded"),
                 (499, Cancelled, "request was cancelled"),
-            ],
-        ),
-        (
-            vec![],
-            [
-                (overload, Overload, limit_message.as_str()),
-                (503, Overload, limit_message.as_str()),
-                (500, Internal, "internal server error"),
             ],
         ),
     ] {
@@ -158,16 +127,6 @@ async fn native_error_phase_and_nested_chain_compatibility() {
                     } else {
                         Arc::new(dynamo_vllm_generate::VllmFormat)
                     };
-                    if after_dispatch && kinds.is_empty() {
-                        // No response stream carries the typed refusal; classify it directly.
-                        let error =
-                            format.worker_error(&limit(), ErrorPhase::Stream { cancelled: false });
-                        assert_eq!(
-                            (error.status.as_u16(), error.kind, error.message.as_str()),
-                            (status, metric, message)
-                        );
-                        continue;
-                    }
                     let body = if is_sglang {
                         serde_json::json!({"input_ids":[1],"stream":streaming})
                     } else {
@@ -190,7 +149,6 @@ async fn native_error_phase_and_nested_chain_compatibility() {
                         },
                         "{kinds:?}"
                     );
-                    assert!(!response.headers().contains_key("retry-after"));
                     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
                         .await
                         .unwrap();
@@ -207,14 +165,6 @@ async fn native_error_phase_and_nested_chain_compatibility() {
                         serde_json::json!({"error":{"message":message}})
                     } else {
                         let kind = match status {
-                            // A queue drop names its cause at any configured status.
-                            _ if !after_dispatch && metric == Overload => {
-                                if kinds.is_empty() {
-                                    "queue_rejected"
-                                } else {
-                                    "deadline_exceeded"
-                                }
-                            }
                             400 => "invalid_request_error",
                             429 => "deadline_exceeded",
                             499 => "request_cancelled",

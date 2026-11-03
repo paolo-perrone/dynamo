@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
 
 mod error;
-pub use error::{ErrorPhase, QueueDrop, WorkerError};
+pub use error::{ErrorPhase, WorkerError};
 
 /// Names the format the frontend serves.
 pub const FORMAT_ENV: &str = "DYN_GENERATE_FORMAT";
@@ -212,12 +212,6 @@ pub trait GenerateFormat: Send + Sync + 'static {
     /// The body of a failed response.
     fn error_body(&self, _status: StatusCode, message: &str) -> Value {
         json!({"error": {"message": message}})
-    }
-
-    /// The body of a failed worker response, by default [`Self::error_body`].
-    /// A format whose body names the failure can tell a router queue drop apart.
-    fn worker_error_body(&self, error: &WorkerError) -> Value {
-        self.error_body(error.status, &error.message)
     }
 }
 

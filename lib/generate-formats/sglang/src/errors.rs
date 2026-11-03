@@ -27,22 +27,11 @@ pub(super) fn classify(
     if matches!(phase, ErrorPhase::Dispatch) {
         return WorkerError::dispatch(error, invalid);
     }
-    // Both unary folding and SSE used this ordering. In unary, a router queue
-    // drop, the deadline before the limit, is a 503 overload and cancellation is
-    // 499; SSE has already committed HTTP 200.
+    // Both unary folding and SSE used this ordering. In unary, cancellation
+    // (including a queue deadline) is 499; SSE has already committed HTTP 200.
     let cancelled = StatusCode::from_u16(499).unwrap();
     if request_deadline_exceeded(error) {
-        WorkerError::new(
-            ErrorType::Overload,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "request deadline exceeded",
-        )
-    } else if let Some(rejection) = queue_rejection(error) {
-        WorkerError::new(
-            ErrorType::Overload,
-            StatusCode::SERVICE_UNAVAILABLE,
-            rejection,
-        )
+        WorkerError::new(ErrorType::Cancelled, cancelled, "request deadline exceeded")
     } else if request_was_rejected(error) {
         WorkerError::new(
             ErrorType::Overload,

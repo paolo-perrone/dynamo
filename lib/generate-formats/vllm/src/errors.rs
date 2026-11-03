@@ -13,8 +13,8 @@ pub(super) fn classify(
     if matches!(phase, ErrorPhase::Dispatch) {
         return WorkerError::dispatch(error, invalid);
     }
-    // Preserve vLLM's unary-fold policy: deadline, queue-limit, and overload markers
-    // alone were internal stream failures, unlike errors returned before dispatch.
+    // Preserve vLLM's unary-fold policy: deadline and overload markers alone
+    // were internal stream failures, unlike errors returned before dispatch.
     if matches!(phase, ErrorPhase::Stream { cancelled: true }) || request_was_cancelled(error) {
         WorkerError::new(
             ErrorType::Cancelled,

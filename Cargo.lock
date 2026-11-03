@@ -2495,7 +2495,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum 0.8.4",
- "dynamo-kv-router",
  "dynamo-llm",
  "dynamo-runtime",
  "dynamo-sglang-generate",

@@ -36,7 +36,6 @@ use super::openai::{
 use super::{RouteDoc, service_v2};
 use crate::generate_format::{
     Bound, ClientError, ClientRequest, ErrorPhase, GenerateExchange, Opened, SharedFormat, Worker,
-    WorkerError,
 };
 use crate::protocols::Annotated;
 use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
@@ -97,17 +96,16 @@ fn client_error(format: &SharedFormat, error: ClientError) -> Response {
         .unwrap_or_else(|| error_response(format, error.status, &error.message))
 }
 
-fn worker_error_response(format: &SharedFormat, error: &WorkerError) -> Response {
-    (error.status, Json(format.worker_error_body(error))).into_response()
-}
-
 fn stream_error(
     format: &SharedFormat,
     error: &(dyn std::error::Error + 'static),
 ) -> (ErrorType, String) {
-    let error = format.worker_error(error, ErrorPhase::Stream { cancelled: false });
-    let body = format.worker_error_body(&error).to_string();
-    (error.kind, body)
+    let crate::generate_format::WorkerError {
+        kind: error_type,
+        status,
+        message,
+    } = format.worker_error(error, ErrorPhase::Stream { cancelled: false });
+    (error_type, format.error_body(status, &message).to_string())
 }
 
 fn adapt_openai_error(format: &SharedFormat, response: super::openai::ErrorResponse) -> Response {
@@ -500,17 +498,15 @@ impl Dispatch {
         let stream = match generate_result {
             Ok(stream) => stream,
             Err(error) => {
-                let worker_error = format.worker_error(error.as_ref(), ErrorPhase::Dispatch);
-                // A router class queue drop keeps its `Overload` kind and its status,
-                // even a configured 499: it is neither a cancellation nor a rejection.
-                let queue_drop = worker_error.queue_drop.is_some();
-                if request_context.is_killed() || (!queue_drop && worker_error.status == CANCELLED)
-                {
+                let crate::generate_format::WorkerError {
+                    kind: mut error_type,
+                    status,
+                    message,
+                } = format.worker_error(error.as_ref(), ErrorPhase::Dispatch);
+                if request_context.is_killed() || status == CANCELLED {
                     return cancelled(&mut inflight_guard);
                 }
-                let response = worker_error_response(&format, &worker_error);
-                let mut error_type = worker_error.kind;
-                if error_type == ErrorType::Overload && !queue_drop {
+                if error_type == ErrorType::Overload {
                     // Pre-stream rejections count as unavailable, with a rejection metric.
                     error_type = ErrorType::Unavailable;
                     state
@@ -523,7 +519,7 @@ impl Dispatch {
                     tracing::warn!(%request_id, error = %format!("{error:#}"), "generate request failed before streaming");
                 }
                 inflight_guard.mark_error(error_type);
-                return response;
+                return error_response(&format, status, &message);
             }
         };
 
@@ -550,18 +546,21 @@ impl Dispatch {
                     Json(response).into_response()
                 }
                 Some(Err(error)) => {
-                    let worker_error = format.worker_error(
+                    let crate::generate_format::WorkerError {
+                        kind: error_type,
+                        status,
+                        message,
+                    } = format.worker_error(
                         &error,
                         ErrorPhase::Stream {
                             cancelled: request_context.is_killed() || engine_context.is_killed(),
                         },
                     );
-                    if worker_error.kind == ErrorType::Internal {
+                    if error_type == ErrorType::Internal {
                         tracing::error!(%request_id, %error, "generate stream failed");
                     }
-                    let response = worker_error_response(&format, &worker_error);
-                    inflight_guard.mark_error(worker_error.kind);
-                    response
+                    inflight_guard.mark_error(error_type);
+                    error_response(&format, status, &message)
                 }
                 _ => cancelled(&mut inflight_guard),
             };
